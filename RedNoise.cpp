@@ -269,58 +269,6 @@ void fillTriangle(DrawingWindow &window, const CanvasTriangle &triangle, const C
 
 
 
-void fillTexturedTriangle(DrawingWindow &window, const CanvasTriangle &triangle, const TextureMap &texture) {
-    std::array<CanvasPoint, 3> sortedVertices = getSortedVertices(triangle);
-
-    auto computeIntersection = [](const CanvasPoint &a, const CanvasPoint &b, float y) -> CanvasPoint {
-        float alpha = (y - a.y) / (b.y - a.y);
-        float x = a.x + alpha * (b.x - a.x);
-        float u = a.texturePoint.x + alpha * (b.texturePoint.x - a.texturePoint.x);
-        float v = a.texturePoint.y + alpha * (b.texturePoint.y - a.texturePoint.y);
-
-        CanvasPoint resultPoint(x, y);
-        resultPoint.texturePoint = TexturePoint(u, v);
-
-        return resultPoint;
-    };
-
-
-    for (int y = static_cast<int>(sortedVertices[0].y); y < static_cast<int>(sortedVertices[1].y); y++) {
-        CanvasPoint start = computeIntersection(sortedVertices[0], sortedVertices[2], y);
-        CanvasPoint end = computeIntersection(sortedVertices[0], sortedVertices[1], y);
-
-        // 检查并交换 start 和 end，确保 start 在左边
-        if(start.x > end.x) {
-            std::swap(start, end);
-        }
-
-        drawTexturedLine(window, start, end, texture);
-    }
-
-    for (int y = static_cast<int>(sortedVertices[1].y); y <= static_cast<int>(sortedVertices[2].y); y++) {
-        CanvasPoint start = computeIntersection(sortedVertices[0], sortedVertices[2], y);
-        CanvasPoint end = computeIntersection(sortedVertices[1], sortedVertices[2], y);
-
-        // 同样，检查并交换 start 和 end
-        if(start.x > end.x) {
-            std::swap(start, end);
-        }
-
-        drawTexturedLine(window, start, end, texture);
-    }
-
-//    for (int y = static_cast<int>(sortedVertices[1].y); y <= static_cast<int>(sortedVertices[2].y); y++) {
-//        CanvasPoint start = computeIntersection(sortedVertices[0], sortedVertices[2],y );
-//        drawDebugPoint(window, start);
-//        CanvasPoint end = computeIntersection(sortedVertices[1], sortedVertices[2], y);
-//        drawDebugPoint(window, end);
-//        drawTexturedLine(window, start, end, texture);
-//
-//    }
-
-
-}
-
 
 
 
@@ -556,6 +504,8 @@ std::vector<ModelTriangle> loadOBJWithTexture(const std::string &filename, const
     std::vector<TexturePoint> texturePoints;
     Colour currentColour;
     bool isMirror = false;
+    bool isMetal = false;
+    float reflectivity;
 
     std::ifstream file(filename);
     if (!file.is_open()) {
@@ -579,14 +529,19 @@ std::vector<ModelTriangle> loadOBJWithTexture(const std::string &filename, const
             if (palette.find(currentMaterial) != palette.end()) {
                 currentColour = palette.at(currentMaterial);
                 isMirror = (currentMaterial == "Mirror");
-            } else {
+                isMetal = (currentMaterial == "Metal");
+                if (isMetal) {
+                    reflectivity = 1.3f; // 假定的反射率
+                }
+            }
+            else {
                 std::cerr << "Material '" << currentMaterial << "' not found in palette." << std::endl;
                 // 处理未找到材质的情况，例如使用默认颜色
                 currentColour = Colour(255, 255, 255); // 或其他默认颜色
             } }else if (tokens[0] == "f") {
             std::array<glm::vec3, 3> faceVertices;
             std::array<TexturePoint, 3> faceTexturePoints;
-
+            bool hasTexture = true;  // 假设面有纹理，除非证明没有
             for (int i = 0; i < 3; i++) {
                 std::vector<std::string> faceTokens = split(tokens[i + 1], '/');
                 int vertexIndex = std::stoi(faceTokens[0]) - 1;
@@ -595,6 +550,8 @@ std::vector<ModelTriangle> loadOBJWithTexture(const std::string &filename, const
                 if (faceTokens.size() > 1 && !faceTokens[1].empty()) {
                     int textureIndex = std::stoi(faceTokens[1]) - 1;
                     faceTexturePoints[i] = texturePoints[textureIndex];
+                }else {
+                    hasTexture = false;  // 没有纹理坐标
                 }
             }
 
@@ -603,7 +560,14 @@ std::vector<ModelTriangle> loadOBJWithTexture(const std::string &filename, const
             triangle.texturePoints = faceTexturePoints;
             triangle.normal = normal;
             triangle.isMirror = isMirror;
+            triangle.isMetal = isMetal;
+            triangle.hasTexture = hasTexture;
             triangles.push_back(triangle);
+            if (currentMaterial == "Metal") {
+                triangle.metalColor = glm::vec3(1.0f, 0.843f, 0.0f); // 金色
+                triangle.reflectivity = 0.8f; // 高反射率
+                triangle.roughness = 0.03f; // 低粗糙度
+            }
         }
     }
 
@@ -650,49 +614,42 @@ struct Material {
 };
 
 
-std::map<std::string, Material> loadMTLWithTexture(const std::string& filename) {
-    std::map<std::string, Material> materials;
-
-    std::ifstream file(filename);
-    if (!file.is_open()) {
-        std::cerr << "Failed to open the MTL file: " << filename << std::endl;
-        return materials;
-    }
-
-    std::string currentMaterial;
-    std::string line;
-    while (std::getline(file, line)) {
-        if (line.substr(0, 6) == "newmtl") {
-            currentMaterial = line.substr(7);
-        }
-        else if (line.substr(0, 2) == "Kd" && !currentMaterial.empty()) {
-            size_t pos1 = line.find(" ") + 1;
-            size_t pos2 = line.find(" ", pos1) + 1;
-            size_t pos3 = line.find(" ", pos2) + 1;
-
-            float r = std::stof(line.substr(pos1, pos2 - pos1 - 1));
-            float g = std::stof(line.substr(pos2, pos3 - pos2 - 1));
-            float b = std::stof(line.substr(pos3));
-
-            materials[currentMaterial].colour = Colour(r * 255, g * 255, b * 255);
-        }
-        else if (line.substr(0, 6) == "map_Kd" && !currentMaterial.empty()) {
-            size_t pos = line.find(" ") + 1;
-            materials[currentMaterial].texturePath = line.substr(pos);
-        }
-    }
-
-    return materials;
-}
-
-
-
-
-
-
 float interpolate(float from, float to, float alpha) {
     return from + alpha * (to - from);
 }
+
+//void drawLineWithDepth(DrawingWindow &window, const CanvasPoint &start, const CanvasPoint &end, const Colour &color, std::vector<std::vector<float>>& depthBuffer) {
+//    int deltaX = end.x - start.x;
+//    int deltaY = end.y - start.y;
+//    int numberOfSteps = std::max(std::abs(deltaX), std::abs(deltaY));
+//    float xIncrement = static_cast<float>(deltaX) / numberOfSteps;
+//    float yIncrement = static_cast<float>(deltaY) / numberOfSteps;
+//
+//    float currentX = start.x;
+//    float currentY = start.y;
+//
+//    for (int i = 0; i <= numberOfSteps; i++) {
+//        float alpha = static_cast<float>(i) / numberOfSteps;
+//        float depth = 1.0f / interpolate(1.0f / start.depth, 1.0f / end.depth, alpha);
+//
+//        int x = static_cast<int>(currentX);
+//        int y = static_cast<int>(currentY);
+//
+//        if (x >= 0 && x < depthBuffer.size() && y >= 0 && y < depthBuffer[0].size() && depth < depthBuffer[x][y]) {
+//            uint32_t packedColor = (color.red << 16) | (color.green << 8) | color.blue;
+//            window.setPixelColour(x, y, packedColor);
+//            depthBuffer[x][y] = depth;
+//        }
+//        if (start.x < 0 || start.x >= window.width || start.y < 0 || start.y >= window.height ||
+//            end.x < 0 || end.x >= window.width || end.y < 0 || end.y >= window.height) {
+//            // 可以在这里添加代码来处理线段超出窗口的情况
+//            return;
+//        }
+//
+//        currentX += xIncrement;
+//        currentY += yIncrement;
+//    }
+//}
 
 void drawLineWithDepth(DrawingWindow &window, const CanvasPoint &start, const CanvasPoint &end, const Colour &color, std::vector<std::vector<float>>& depthBuffer) {
     int deltaX = end.x - start.x;
@@ -706,6 +663,8 @@ void drawLineWithDepth(DrawingWindow &window, const CanvasPoint &start, const Ca
 
     for (int i = 0; i <= numberOfSteps; i++) {
         float alpha = static_cast<float>(i) / numberOfSteps;
+
+        // 使用 interpolate 函数计算深度
         float depth = 1.0f / interpolate(1.0f / start.depth, 1.0f / end.depth, alpha);
 
         int x = static_cast<int>(currentX);
@@ -716,16 +675,139 @@ void drawLineWithDepth(DrawingWindow &window, const CanvasPoint &start, const Ca
             window.setPixelColour(x, y, packedColor);
             depthBuffer[x][y] = depth;
         }
-        if (start.x < 0 || start.x >= window.width || start.y < 0 || start.y >= window.height ||
-            end.x < 0 || end.x >= window.width || end.y < 0 || end.y >= window.height) {
-            // 可以在这里添加代码来处理线段超出窗口的情况
-            return;
+
+        currentX += xIncrement;
+        currentY += yIncrement;
+    }
+}
+
+
+void fillTriangle(DrawingWindow &window, const CanvasTriangle &triangle, const Colour &color, std::vector<std::vector<float>>& depthBuffer) {
+    std::array<CanvasPoint, 3> sortedVertices = getSortedVertices(triangle);
+
+    auto computeIntersection = [](const CanvasPoint &a, const CanvasPoint &b, float y) {
+        if (std::abs(b.y - a.y) < 1e-5) {
+            // 如果两个顶点的 y 坐标几乎相同，则可以直接取其中一个顶点的 x 和 depth
+            return CanvasPoint(a.x, y,abs(a.depth));
+        } else {
+            float slope = (y - a.y) / (b.y - a.y);
+            float x = a.x + slope * (b.x - a.x);
+            float depth = std::abs(a.depth + slope * (b.depth - a.depth));
+            return CanvasPoint(x, y, depth);
+        };
+    };
+
+    for (float y = std::round(sortedVertices[0].y); y <= sortedVertices[1].y; y += 1.0f) {
+        int yInt = std::round(y);
+        CanvasPoint start = computeIntersection(sortedVertices[0], sortedVertices[2], yInt);
+        CanvasPoint end = computeIntersection(sortedVertices[0], sortedVertices[1], yInt);
+
+
+        start.x = std::max(std::min(start.x, std::max(sortedVertices[0].x, sortedVertices[2].x)), std::min(sortedVertices[0].x, sortedVertices[2].x));
+        end.x = std::max(std::min(end.x, std::max(sortedVertices[0].x, sortedVertices[1].x)), std::min(sortedVertices[0].x, sortedVertices[1].x));
+
+        if (start.x > end.x) std::swap(start, end);
+        if (start.x != end.x) {
+            drawLineWithDepth(window, start, end, color, depthBuffer);
+        }
+    }
+
+
+    for (float y = std::round(sortedVertices[1].y); y <= sortedVertices[2].y; y += 1.0f) {
+        int yInt = std::round(y);
+        CanvasPoint start = computeIntersection(sortedVertices[1], sortedVertices[2], yInt);
+        CanvasPoint end = computeIntersection(sortedVertices[0], sortedVertices[2], yInt);
+
+        // 确保 start 和 end 不超出三角形边界
+        start.x = std::max(std::min(start.x, std::max(sortedVertices[1].x, sortedVertices[2].x)), std::min(sortedVertices[1].x, sortedVertices[2].x));
+        end.x = std::max(std::min(end.x, std::max(sortedVertices[0].x, sortedVertices[2].x)), std::min(sortedVertices[0].x, sortedVertices[2].x));
+
+        if (start.x > end.x) std::swap(start, end);
+        drawLineWithDepth(window, start, end, color, depthBuffer);
+    }
+
+}
+
+
+
+
+void drawTexLineWithDepth(DrawingWindow &window, const CanvasPoint &start, const CanvasPoint &end, TextureMap &textureMap, std::vector<std::vector<float>>& depthBuffer) {
+    int deltaX = end.x - start.x;
+    int deltaY = end.y - start.y;
+    int numberOfSteps = std::max(std::abs(deltaX), std::abs(deltaY));
+    float xIncrement = static_cast<float>(deltaX) / numberOfSteps;
+    float yIncrement = static_cast<float>(deltaY) / numberOfSteps;
+
+    float currentX = start.x;
+    float currentY = start.y;
+
+    for (int i = 0; i <= numberOfSteps; i++) {
+        int x = static_cast<int>(currentX);
+        int y = static_cast<int>(currentY);
+
+        if (x >= 0 && x < window.width && y >= 0 && y < window.height) {
+            float alpha = static_cast<float>(i) / numberOfSteps;
+
+            // 插值纹理坐标
+            float textureX = start.texturePoint.x + alpha * (end.texturePoint.x - start.texturePoint.x);
+            float textureY = start.texturePoint.y + alpha * (end.texturePoint.y - start.texturePoint.y);
+
+            // 从纹理映射获取颜色
+            uint32_t color = textureMap.getColourAt(textureX, textureY);
+
+            // 绘制像素点
+            window.setPixelColour(x, y, color);
         }
 
         currentX += xIncrement;
         currentY += yIncrement;
     }
 }
+
+
+
+void fillTexturedTriangle(DrawingWindow &window, const CanvasTriangle &triangle, TextureMap &textureMap, std::vector<std::vector<float>>& depthBuffer) {
+    std::array<CanvasPoint, 3> sortedVertices = getSortedVertices(triangle);
+
+    auto computeIntersection = [](const CanvasPoint &a, const CanvasPoint &b, float y) -> CanvasPoint {
+        float alpha = (y - a.y) / (b.y - a.y);
+        float x = a.x + alpha * (b.x - a.x);
+        float u = a.texturePoint.x + alpha * (b.texturePoint.x - a.texturePoint.x);
+        float v = a.texturePoint.y + alpha * (b.texturePoint.y - a.texturePoint.y);
+
+        CanvasPoint resultPoint(x, y);
+        resultPoint.texturePoint = TexturePoint(u, v);
+
+        return resultPoint;
+    };
+
+
+    for (int y = static_cast<int>(sortedVertices[0].y); y < static_cast<int>(sortedVertices[1].y); y++) {
+        CanvasPoint start = computeIntersection(sortedVertices[0], sortedVertices[2], y);
+        CanvasPoint end = computeIntersection(sortedVertices[0], sortedVertices[1], y);
+
+        // 检查并交换 start 和 end，确保 start 在左边
+        if(start.x > end.x) {
+            std::swap(start, end);
+        }
+
+        drawTexLineWithDepth(window, start, end, textureMap,depthBuffer);
+    }
+
+    for (int y = static_cast<int>(sortedVertices[1].y); y <= static_cast<int>(sortedVertices[2].y); y++) {
+        CanvasPoint start = computeIntersection(sortedVertices[0], sortedVertices[2], y);
+        CanvasPoint end = computeIntersection(sortedVertices[1], sortedVertices[2], y);
+
+        // 同样，检查并交换 start 和 end
+        if(start.x > end.x) {
+            std::swap(start, end);
+        }
+
+        drawTexLineWithDepth(window, start, end, textureMap,depthBuffer);
+    }
+
+}
+
 
 
 glm::mat3 rotationY(float angle) {
@@ -892,43 +974,6 @@ CanvasPoint getCanvasIntersectionPoint(const glm::vec3& cameraPosition, const gl
 //}
 
 
-void fillTriangle(DrawingWindow &window, const CanvasTriangle &triangle, const Colour &color, std::vector<std::vector<float>>& depthBuffer) {
-    std::array<CanvasPoint, 3> sortedVertices = {triangle.vertices[0], triangle.vertices[1], triangle.vertices[2]};
-    std::sort(sortedVertices.begin(), sortedVertices.end(), [](const CanvasPoint &a, const CanvasPoint &b) -> bool {
-        return a.y < b.y;
-    });
-
-    auto computeIntersection = [](const CanvasPoint &a, const CanvasPoint &b, float y) {
-        if (std::abs(b.y - a.y) < 1e-5) {
-            // 如果两个顶点的 y 坐标几乎相同，则可以直接取其中一个顶点的 x 和 depth
-            return CanvasPoint(a.x, y,abs(a.depth));
-        } else {
-            float slope = (y - a.y) / (b.y - a.y);
-            float x = a.x + slope * (b.x - a.x);
-            float depth = std::abs(a.depth + slope * (b.depth - a.depth));
-            return CanvasPoint(x, y, depth);
-        };
-    };
-
-
-
-    for (float y = std::round(sortedVertices[0].y); y <= sortedVertices[1].y; y += 1.0f) {
-        int yInt = std::round(y); // 舍入到最接近的整数行
-        CanvasPoint start = computeIntersection(sortedVertices[0], sortedVertices[2], yInt);
-        CanvasPoint end = computeIntersection(sortedVertices[0], sortedVertices[1], yInt);
-        if (start.x > end.x) std::swap(start, end);
-        drawLineWithDepth(window, start, end, color, depthBuffer);
-    }
-
-    for (float y = std::round(sortedVertices[1].y); y <= sortedVertices[2].y; y += 1.0f) {
-        int yInt = std::round(y); // 舍入到最接近的整数行
-        CanvasPoint start = computeIntersection(sortedVertices[1], sortedVertices[2], yInt);
-        CanvasPoint end = computeIntersection(sortedVertices[0], sortedVertices[2], yInt);
-        if (start.x > end.x) std::swap(start, end);
-        drawLineWithDepth(window, start, end, color, depthBuffer);
-    }
-}
-
 
 void animateCameraOrbit(glm::vec3 &cameraPosition) {
     float rotationAmount = glm::radians(0.01f);
@@ -1064,7 +1109,8 @@ glm::vec3 getRayDirectionFromPixel(int x, int y, int screenWidth, int screenHeig
     return NormalizeRayDirection;
 }
 
-
+//
+//
 RayTriangleIntersection getClosestValidIntersection(
         const glm::vec3 &rayOrigin,
         const glm::vec3 &rayDirection,
@@ -1107,6 +1153,77 @@ RayTriangleIntersection getClosestValidIntersection(
     return closestIntersection;
 }
 
+//RayTriangleIntersection getReflectionIntersection(
+//        const glm::vec3 &rayOrigin,
+//        const glm::vec3 &rayDirection,
+//        const std::vector<ModelTriangle> &triangles,
+//        int depth = 0,
+//        const int maxDepth = 20
+//) {
+//    RayTriangleIntersection closestIntersection;
+//    closestIntersection.distanceFromCamera = std::numeric_limits<float>::infinity();
+//    closestIntersection.triangleIndex = -1;
+//
+//    for (size_t i = 0; i < triangles.size(); ++i) {
+//        const ModelTriangle& triangle = triangles[i];
+//        glm::vec3 e0 = triangle.vertices[1] - triangle.vertices[0];
+//        glm::vec3 e1 = triangle.vertices[2] - triangle.vertices[0];
+//        glm::vec3 SPVector = rayOrigin - triangle.vertices[0];
+//        glm::mat3 DEMatrix(-rayDirection, e0, e1);
+//        glm::vec3 possibleSolution = glm::inverse(DEMatrix) * SPVector;
+//
+//        float t = possibleSolution.x, u = possibleSolution.y, v = possibleSolution.z;
+//
+//        if (u >= 0.0f && u <= 1.0f && v >= 0.0f && v <= 1.0f && (u + v) <= 1.0f && t > 0 && t < closestIntersection.distanceFromCamera) {
+//            closestIntersection.distanceFromCamera = t;
+//            closestIntersection.intersectedTriangle = triangle;
+//            closestIntersection.triangleIndex = i;
+//            closestIntersection.intersectionPoint = rayOrigin + rayDirection * t;
+//        }
+//    }
+//
+//    if (depth < maxDepth && closestIntersection.triangleIndex != -1 && triangles[closestIntersection.triangleIndex].isMirror) {
+//        glm::vec3 reflectionDirection = glm::reflect(rayDirection, closestIntersection.intersectedTriangle.normal);
+//        glm::vec3 reflectionOrigin = closestIntersection.intersectionPoint + reflectionDirection * 0.001f; // 防止自我相交
+//        return getReflectionIntersection(reflectionOrigin, reflectionDirection, triangles, depth + 1, maxDepth);
+//    }
+//
+//    return closestIntersection;
+//}
+Colour Mix(const Colour& a, const Colour& b, float blend) {
+    float inverseBlend = 1.0f - blend;
+    return Colour(
+            int(a.red * inverseBlend + b.red * blend),
+            int(a.green * inverseBlend + b.green * blend),
+            int(a.blue * inverseBlend + b.blue * blend)
+    );
+}
+
+glm::vec3 Mix(const glm::vec3& a, const glm::vec3& b, float blend) {
+    float inverseBlend = 1.0f - blend;
+    return glm::vec3(
+            a.x * inverseBlend + b.x * blend,
+            a.y * inverseBlend + b.y * blend,
+            a.z * inverseBlend + b.z * blend
+    );
+}
+
+
+glm::vec3 randomInUnitSphere() {
+    glm::vec3 p;
+    do {
+        p = 2.0f * glm::vec3(static_cast<float>(rand()) / RAND_MAX,
+                             static_cast<float>(rand()) / RAND_MAX,
+                             static_cast<float>(rand()) / RAND_MAX) - glm::vec3(1, 1, 1);
+    } while (glm::length(p) >= 1.0f);
+    return p;
+}
+
+Colour vec3ToColour(const glm::vec3& vec) {
+    return Colour(static_cast<int>(vec.r * 255), static_cast<int>(vec.g * 255), static_cast<int>(vec.b * 255));
+}
+
+
 RayTriangleIntersection getReflectionIntersection(
         const glm::vec3 &rayOrigin,
         const glm::vec3 &rayDirection,
@@ -1114,10 +1231,12 @@ RayTriangleIntersection getReflectionIntersection(
         int depth = 0,
         const int maxDepth = 20
 ) {
+
     RayTriangleIntersection closestIntersection;
     closestIntersection.distanceFromCamera = std::numeric_limits<float>::infinity();
     closestIntersection.triangleIndex = -1;
 
+    // 寻找最近的交点
     for (size_t i = 0; i < triangles.size(); ++i) {
         const ModelTriangle& triangle = triangles[i];
         glm::vec3 e0 = triangle.vertices[1] - triangle.vertices[0];
@@ -1136,29 +1255,47 @@ RayTriangleIntersection getReflectionIntersection(
         }
     }
 
-    if (depth < maxDepth && closestIntersection.triangleIndex != -1 && triangles[closestIntersection.triangleIndex].isMirror) {
-        glm::vec3 reflectionDirection = glm::reflect(rayDirection, closestIntersection.intersectedTriangle.normal);
-        glm::vec3 reflectionOrigin = closestIntersection.intersectionPoint + reflectionDirection * 0.001f; // 防止自我相交
-        return getReflectionIntersection(reflectionOrigin, reflectionDirection, triangles, depth + 1, maxDepth);
+    // 处理反射
+    if (depth < maxDepth && closestIntersection.triangleIndex != -1) {
+        const ModelTriangle& triangle = triangles[closestIntersection.triangleIndex];
+        if (triangle.isMirror || triangle.isMetal) {
+            glm::vec3 reflectionDirection = glm::reflect(rayDirection, closestIntersection.intersectedTriangle.normal);
+
+            // 对于金属材料，加入粗糙度导致的随机性
+            if (triangle.isMetal) {
+                reflectionDirection += randomInUnitSphere() * triangle.roughness;
+                reflectionDirection = glm::normalize(reflectionDirection);
+            }
+
+            glm::vec3 reflectionOrigin = closestIntersection.intersectionPoint + reflectionDirection * 0.001f;
+            RayTriangleIntersection reflectedIntersection = getReflectionIntersection(
+                    reflectionOrigin, reflectionDirection, triangles, depth + 1, maxDepth);
+
+            // 在最后一层混合颜色
+            if (triangle.isMetal && depth == maxDepth - 1) {
+                reflectedIntersection.intersectedTriangle.colour = Mix(vec3ToColour(triangle.metalColor), reflectedIntersection.intersectedTriangle.colour, triangle.reflectivity);
+            }
+
+            return reflectedIntersection;
+        }
     }
 
     return closestIntersection;
 }
 
-
 RayTriangleIntersection getClosestValidIntersectionWithReflection(
         const glm::vec3 &rayOrigin,
         const glm::vec3 &rayDirection,
         const std::vector<ModelTriangle> &triangles,
-//        const TextureMap &textureMap, // 假设您有一个纹理映射
         int depth = 0,
         const int maxDepth = 5
 ) {
+
     RayTriangleIntersection closestIntersection;
     float closestDistance = std::numeric_limits<float>::infinity();
     size_t closestIndex = -1;
 
-    // 交点计算
+    // 寻找最近的交点
     for (size_t i = 0; i < triangles.size(); ++i) {
         const ModelTriangle& triangle = triangles[i];
         glm::vec3 e0 = triangle.vertices[1] - triangle.vertices[0];
@@ -1171,7 +1308,6 @@ RayTriangleIntersection getClosestValidIntersectionWithReflection(
         float u = possibleSolution.y;
         float v = possibleSolution.z;
 
-        // 检查交点是否在三角形内部
         if (u >= 0.0f && u <= 1.0f && v >= 0.0f && v <= 1.0f && (u + v) <= 1.0f && t > 0 && t < closestDistance) {
             closestDistance = t;
             closestIndex = i;
@@ -1184,25 +1320,161 @@ RayTriangleIntersection getClosestValidIntersectionWithReflection(
         }
     }
 
-    // 反射处理
-    if (depth < maxDepth && closestIndex != -1 && triangles[closestIndex].isMirror) {
-        glm::vec3 reflectionDirection = glm::reflect(rayDirection, triangles[closestIndex].normal);
-        glm::vec3 reflectionOrigin = closestIntersection.intersectionPoint + reflectionDirection * 0.001f; // 防止自我相交
-        RayTriangleIntersection reflectedIntersection = getClosestValidIntersectionWithReflection(
-                reflectionOrigin, reflectionDirection, triangles,  depth + 1, maxDepth);
+    // 处理反射
+    if (depth < maxDepth && closestIndex != -1) {
+        const ModelTriangle& triangle = triangles[closestIndex];
+        if (triangle.isMirror || triangle.isMetal) {
+            glm::vec3 reflectionDirection = glm::reflect(rayDirection, triangle.normal);
 
-//        // 纹理处理
-//        if (reflectedIntersection.intersectedTriangle.hasTexture) {
-//            glm::vec2 uv = reflectedIntersection.getUVCoordinates(); // 假设有获取UV坐标的方法
-//            Colour textureColour = textureMap.getColourAt(uv); // 获取纹理映射中对应的颜色
-//            reflectedIntersection.intersectedTriangle.colour = textureColour; // 设置纹理颜色
-//        }
+            // 对于金属材料，加入粗糙度导致的随机性
+            if (triangle.isMetal) {
+                reflectionDirection += randomInUnitSphere() * triangle.roughness;
+                reflectionDirection = glm::normalize(reflectionDirection);
+            }
 
-        return reflectedIntersection;
+            glm::vec3 reflectionOrigin = closestIntersection.intersectionPoint + reflectionDirection * 0.001f;
+            RayTriangleIntersection reflectedIntersection = getClosestValidIntersectionWithReflection(
+                    reflectionOrigin, reflectionDirection, triangles, depth + 1, maxDepth);
+
+            // 在最后一层混合颜色
+            if (triangle.isMetal && depth == maxDepth - 1) {
+                reflectedIntersection.intersectedTriangle.colour = Mix(vec3ToColour(triangle.metalColor), reflectedIntersection.intersectedTriangle.colour, triangle.reflectivity);
+            }
+
+            return reflectedIntersection;
+        }
     }
 
     return closestIntersection;
 }
+
+
+
+//
+//RayTriangleIntersection getClosestValidIntersectionWithReflection(
+//        const glm::vec3 &rayOrigin,
+//        const glm::vec3 &rayDirection,
+//        const std::vector<ModelTriangle> &triangles,
+////        const TextureMap &textureMap, // 假设您有一个纹理映射
+//        int depth = 0,
+//        const int maxDepth = 5
+//) {
+//    RayTriangleIntersection closestIntersection;
+//    float closestDistance = std::numeric_limits<float>::infinity();
+//    size_t closestIndex = -1;
+//
+//    // 交点计算
+//    for (size_t i = 0; i < triangles.size(); ++i) {
+//        const ModelTriangle& triangle = triangles[i];
+//        glm::vec3 e0 = triangle.vertices[1] - triangle.vertices[0];
+//        glm::vec3 e1 = triangle.vertices[2] - triangle.vertices[0];
+//        glm::vec3 SPVector = rayOrigin - triangle.vertices[0];
+//        glm::mat3 DEMatrix(-rayDirection, e0, e1);
+//        glm::vec3 possibleSolution = glm::inverse(DEMatrix) * SPVector;
+//
+//        float t = possibleSolution.x;
+//        float u = possibleSolution.y;
+//        float v = possibleSolution.z;
+//
+//        // 检查交点是否在三角形内部
+//        if (u >= 0.0f && u <= 1.0f && v >= 0.0f && v <= 1.0f && (u + v) <= 1.0f && t > 0 && t < closestDistance) {
+//            closestDistance = t;
+//            closestIndex = i;
+//            closestIntersection = RayTriangleIntersection(
+//                    rayOrigin + rayDirection * t,
+//                    t,
+//                    triangle,
+//                    closestIndex
+//            );
+//        }
+//    }
+//
+//    // 反射处理
+//    if (depth < maxDepth && closestIndex != -1 && triangles[closestIndex].isMirror) {
+//        glm::vec3 reflectionDirection = glm::reflect(rayDirection, triangles[closestIndex].normal);
+//        glm::vec3 reflectionOrigin = closestIntersection.intersectionPoint + reflectionDirection * 0.001f; // 防止自我相交
+//        RayTriangleIntersection reflectedIntersection = getClosestValidIntersectionWithReflection(
+//                reflectionOrigin, reflectionDirection, triangles,  depth + 1, maxDepth);
+//
+////        // 纹理处理
+////        if (reflectedIntersection.intersectedTriangle.hasTexture) {
+////            glm::vec2 uv = reflectedIntersection.getUVCoordinates(); // 假设有获取UV坐标的方法
+////            Colour textureColour = textureMap.getColourAt(uv); // 获取纹理映射中对应的颜色
+////            reflectedIntersection.intersectedTriangle.colour = textureColour; // 设置纹理颜色
+////        }
+//
+//        return reflectedIntersection;
+//    }
+//
+//    return closestIntersection;
+//}
+
+
+
+//RayTriangleIntersection getClosestValidIntersectionWithMentalReflection(
+//        const glm::vec3 &rayOrigin,
+//        const glm::vec3 &rayDirection,
+//        const std::vector<ModelTriangle> &triangles,
+//        int depth = 0,
+//        const int maxDepth = 5
+//) {
+//    RayTriangleIntersection closestIntersection;
+//    float closestDistance = std::numeric_limits<float>::infinity();
+//    size_t closestIndex = -1;
+//
+//    // 交点计算
+//    for (size_t i = 0; i < triangles.size(); ++i) {
+//        const ModelTriangle& triangle = triangles[i];
+//        glm::vec3 e0 = triangle.vertices[1] - triangle.vertices[0];
+//        glm::vec3 e1 = triangle.vertices[2] - triangle.vertices[0];
+//        glm::vec3 SPVector = rayOrigin - triangle.vertices[0];
+//        glm::mat3 DEMatrix(-rayDirection, e0, e1);
+//        glm::vec3 possibleSolution = glm::inverse(DEMatrix) * SPVector;
+//
+//        float t = possibleSolution.x;
+//        float u = possibleSolution.y;
+//        float v = possibleSolution.z;
+//
+//        // 检查交点是否在三角形内部
+//        if (u >= 0.0f && u <= 1.0f && v >= 0.0f && v <= 1.0f && (u + v) <= 1.0f && t > 0 && t < closestDistance) {
+//            closestDistance = t;
+//            closestIndex = i;
+//            closestIntersection = RayTriangleIntersection(
+//                    rayOrigin + rayDirection * t,
+//                    t,
+//                    triangle,
+//                    closestIndex
+//            );
+//        }
+//    }
+//
+//    // 反射处理
+//    if (depth < maxDepth && closestIndex != -1) {
+//        const ModelTriangle& hitTriangle = triangles[closestIndex];
+//        if (hitTriangle.isMirror) {
+//            glm::vec3 reflectionDirection = glm::reflect(rayDirection, hitTriangle.normal);
+//            glm::vec3 reflectionOrigin = closestIntersection.intersectionPoint + reflectionDirection * 0.001f; // 防止自我相交
+//            return getClosestValidIntersectionWithReflection(
+//                    reflectionOrigin, reflectionDirection, triangles, depth + 1, maxDepth);
+//        }
+//        else if (hitTriangle.isMetal) {
+//            // 计算金属反射方向
+//            glm::vec3 reflectionDirection = glm::reflect(rayDirection, hitTriangle.normal);
+//            glm::vec3 reflectionOrigin = closestIntersection.intersectionPoint + reflectionDirection * 0.001f; // 防止自我相交
+//            RayTriangleIntersection reflectedIntersection = getClosestValidIntersectionWithReflection(
+//                    reflectionOrigin, reflectionDirection, triangles, depth + 1, maxDepth);
+//
+//            // 根据反射率混合颜色
+//            closestIntersection.intersectedTriangle.colour = Mix(hitTriangle.colour, reflectedIntersection.intersectedTriangle.colour, hitTriangle.reflectivity);
+//            return closestIntersection;
+//        }
+//    }
+//
+//    return closestIntersection;
+//}
+
+
+
 
 
 
@@ -1368,7 +1640,9 @@ void drawRasterisedScene_A(DrawingWindow &window, glm::vec3 cameraPosition, glm:
 }
 
 
-void drawRasterisedScene_M(DrawingWindow &window, glm::vec3 cameraPosition, glm::vec3 lightPosition) {
+
+
+void drawRasterisedScene_Mirror(DrawingWindow &window, glm::vec3 cameraPosition, glm::vec3 lightPosition) {
     const std::string filepath = "/home/merlin/CG2023/Weekly Workbooks/04 Wireframes and Rasterising/models/cornell-box.obj";
     const std::map<std::string, Colour> palette = loadMTL("/home/merlin/CG2023/Weekly Workbooks/04 Wireframes and Rasterising/models/cornell-box.mtl");
     std::vector<ModelTriangle> models = loadOBJWithTexture(filepath, palette);
@@ -1436,6 +1710,74 @@ void drawRasterisedScene_M(DrawingWindow &window, glm::vec3 cameraPosition, glm:
     }
 }
 
+
+void drawRasterisedScene_Metal(DrawingWindow &window, glm::vec3 cameraPosition, glm::vec3 lightPosition) {
+    const std::string filepath = "/home/merlin/CG2023/Weekly Workbooks/04 Wireframes and Rasterising/models/ball.obj";
+    const std::map<std::string, Colour> palette = loadMTL("/home/merlin/CG2023/Weekly Workbooks/04 Wireframes and Rasterising/models/cornell-box.mtl");
+    std::vector<ModelTriangle> models = loadOBJWithTexture(filepath, palette);
+    for (size_t y = 0; y < window.height; y++) {
+        for (size_t x = 0; x < window.width; x++) {
+            glm::vec3 rayDirection = getRayDirectionFromPixel(x, y, window.width, window.height, 1.0f, cameraPosition);
+            // 获取最近的有效交点
+            RayTriangleIntersection rayIntersection = getClosestValidIntersectionWithReflection(cameraPosition, rayDirection, models);
+
+            if (rayIntersection.distanceFromCamera != std::numeric_limits<float>::infinity()) {
+                if (rayIntersection.intersectedTriangle.isMirror) {
+                    // 处理镜面反射
+                    RayTriangleIntersection reflectedIntersection = getReflectionIntersection(
+                            rayIntersection.intersectionPoint,
+                            glm::reflect(rayDirection, rayIntersection.intersectedTriangle.normal),
+                            models
+                    );
+
+                    // 使用反射交点的颜色
+                    Colour reflectedColour = reflectedIntersection.intersectedTriangle.colour;
+                    uint32_t packedReflectedColour = (255 << 24) + (reflectedColour.red << 16) + (reflectedColour.green << 8) + reflectedColour.blue;
+                    window.setPixelColour(x, y, packedReflectedColour);
+                } else {
+                    // 处理非镜面交点
+                    // 距离衰减
+                    float distance = glm::length(lightPosition - rayIntersection.intersectionPoint);
+                    float distanceAttenuation = 100.0f / (5.0f * M_PI * distance * distance);
+
+                    // 法线照明
+                    glm::vec3 lightDir = glm::normalize(lightPosition - rayIntersection.intersectionPoint);
+                    float dotProduct = glm::dot(rayIntersection.intersectedTriangle.normal, lightDir);
+                    float normalBrightness = std::max(dotProduct, 0.0f);
+
+                    float ambientLightThreshold = 0.2f;
+                    // 结合两种效果
+                    float calculatedBrightness = std::min(normalBrightness * distanceAttenuation, 1.0f);
+                    float combinedBrightness = std::max(ambientLightThreshold, calculatedBrightness);
+
+                    // 计算视线方向
+                    glm::vec3 viewDir = glm::normalize(cameraPosition - rayIntersection.intersectionPoint);
+
+                    // 计算反射向量
+                    glm::vec3 reflectDir = glm::reflect(-lightDir, rayIntersection.intersectedTriangle.normal);
+
+                    // 计算镜面反射强度
+                    float specIntensity = std::pow(std::max(glm::dot(viewDir, reflectDir), 0.0f), 256);
+
+                    // 调整颜色亮度
+                    Colour originalColour = rayIntersection.intersectedTriangle.colour;
+                    Colour adjustedColour = adjustBrightness(originalColour, combinedBrightness);
+                    Colour specularColor = multiplyColour(Colour(255, 255, 255), specIntensity);
+                    Colour finalColor = addColours(adjustedColour, specularColor);
+
+                    if (isPointInShadow(rayIntersection.intersectionPoint, rayIntersection.triangleIndex, models)) {
+                        uint32_t packedColour = (255 << 24) + (finalColor.red << 16) + (finalColor.green << 8) + finalColor.blue;
+                        window.setPixelColour(x, y, packedColour);
+                    } else {
+                        finalColor = adjustBrightness(rayIntersection.intersectedTriangle.colour, 0.2f);
+                        uint32_t packedColour = (255 << 24) + (finalColor.red/2 << 16) + (finalColor.green << 8) + finalColor.blue/2;
+                        window.setPixelColour(x, y, packedColour);
+                    }
+                }
+            }
+        }
+    }
+}
 
 //bool isPointInShadow_fix(
 //        const glm::vec3 &intersectionPoint,
@@ -1522,7 +1864,7 @@ bool isPointInShadow_fix(
 }
 
 
-void drawRasterisedScene_M(DrawingWindow &window, glm::vec3 cameraPosition, std::vector<glm::vec3> lightPositions) {
+void drawRasterisedScene_S(DrawingWindow &window, glm::vec3 cameraPosition, std::vector<glm::vec3> lightPositions) {
     const std::string filepath = "/home/merlin/CG2023/Weekly Workbooks/04 Wireframes and Rasterising/models/cornell-box.obj";
 //    const std::string filepath = "/home/merlin/CG2023/Weekly Workbooks/07 Lighting and Shading (external lecture)/resources/sphere.obj";
     const std::map<std::string, Colour> palette = loadMTL("/home/merlin/CG2023/Weekly Workbooks/04 Wireframes and Rasterising/models/cornell-box.mtl");
@@ -1807,12 +2149,14 @@ enum class RenderMode {
     Wireframe,
     Rasterization,
     RayTracing,
+    Texture,
     light,
     ball,
     ball2,
     depth,
     SoftShadows,
-    Mirror
+    Mirror,
+    Refrection
 };
 
 RenderMode currentRenderMode = RenderMode::Wireframe;
@@ -1827,6 +2171,11 @@ void renderScene(DrawingWindow &window, glm::vec3 cameraPosition, glm::vec3 ligh
             "/home/merlin/CG2023/Weekly Workbooks/04 Wireframes and Rasterising/models/cornell-box.mtl");
     std::vector<ModelTriangle> models = loadOBJ(filepath2, palette2);
 
+    const std::string filepath3 = "/home/merlin/CG2023/Weekly Workbooks/05 Navigation and Transformation/models/textured-cornell-box.obj";
+    const std::map<std::string, Colour> palette3 = loadMTL(
+            "/home/merlin/CG2023/Weekly Workbooks/05 Navigation and Transformation/models/textured-cornell-box.mtl");
+    std::vector<ModelTriangle> Texturemodels = loadOBJWithTexture(filepath3, palette3);
+    TextureMap textureMap("/home/merlin/CG2023/Weekly Workbooks/05 Navigation and Transformation/models/texture.ppm");
     Colour white(255, 255, 255);
     glm::vec3 cameraForGouraud(0.0f, 1, 10000);
     Colour colour;
@@ -1887,6 +2236,32 @@ void renderScene(DrawingWindow &window, glm::vec3 cameraPosition, glm::vec3 ligh
             }
             std::cout << "Switched to Rasterization mode." << std::endl;
             break;
+
+        case RenderMode::Texture: {
+            for (const ModelTriangle &triangle: Texturemodels) {
+                CanvasPoint points[3];
+                for (int i = 0; i < 3; i++) {
+                    const glm::vec3 &vertex = triangle.vertices[i];
+                    points[i] = getCanvasIntersectionPoint(cameraPosition, vertex, 2.0, 3 * WIDTH, 3 * HEIGHT);
+                    points[i].texturePoint = triangle.texturePoints[i];
+                    // 调整纹理坐标
+//
+                }
+                CanvasTriangle canvasTriangle(points[0], points[1], points[2]);
+
+                // 根据三角形是否有纹理来决定绘制方式
+                if (triangle.hasTexture) {
+//                        fillTextureTriangle(window, canvasTriangle, textureMap,depthBuffer);
+                    fillTexturedTriangle(window, canvasTriangle, textureMap,depthBuffer);
+                } else {
+                    fillTriangle(window, canvasTriangle, triangle.colour, depthBuffer);
+                }
+            }
+
+
+            break;
+        }
+
         case RenderMode::RayTracing: {
             drawRasterisedScene_fix(window, cameraPosition);
             break;
@@ -1904,11 +2279,15 @@ void renderScene(DrawingWindow &window, glm::vec3 cameraPosition, glm::vec3 ligh
             break;
         }
         case RenderMode::SoftShadows: {
-            drawRasterisedScene_M(window, cameraPosition,lightPositions);
+            drawRasterisedScene_S(window, cameraPosition,lightPositions);
             break;
         }
         case RenderMode::Mirror: {
-            drawRasterisedScene_M(window, cameraPosition,lightPosition2);
+            drawRasterisedScene_Mirror(window, cameraPosition,lightPosition2);
+            break;
+        }
+        case RenderMode::Refrection: {
+            drawRasterisedScene_Metal(window, cameraPosition,lightPosition2);
             break;
         }
             std::cout << "Switched to RayTracing mode." << std::endl;
@@ -2017,7 +2396,7 @@ void handleEvent_week7(SDL_Event event, DrawingWindow &window) {
             currentRenderMode = RenderMode::Rasterization;
         } else if (event.key.keysym.sym == SDLK_3) {
             window.clearPixels();
-            currentRenderMode = RenderMode::RayTracing;
+            currentRenderMode = RenderMode::Texture;
         } else if (event.key.keysym.sym == SDLK_4) {
             window.clearPixels();
             currentRenderMode = RenderMode::light;
@@ -2033,7 +2412,13 @@ void handleEvent_week7(SDL_Event event, DrawingWindow &window) {
         else if (event.key.keysym.sym == SDLK_8) {
             window.clearPixels();
             currentRenderMode = RenderMode::Mirror;
-        } else if (event.type == SDL_MOUSEBUTTONDOWN) {
+        }
+        else if (event.key.keysym.sym == SDLK_9) {
+            window.clearPixels();
+            currentRenderMode = RenderMode::Refrection;
+        }
+
+        else if (event.type == SDL_MOUSEBUTTONDOWN) {
             window.savePPM("output.ppm");
             window.saveBMP("output.bmp");
         }else if (event.key.keysym.sym == SDLK_i) {
