@@ -327,7 +327,7 @@ std::vector<ModelTriangle> loadOBJWithTexture(const std::string &filename, const
                 reflectivity = 1.3f;
                  }
                 if (isGlass) {
-                    refractiveIndex = 1.2f;
+                    refractiveIndex = 1.3f;
                 }
             }
             else {
@@ -731,7 +731,7 @@ void fillTexturedTriangleWithDepth(DrawingWindow &window, const CanvasTriangle &
 glm::vec3 getRayDirectionFromPixel(int x, int y, int screenWidth, int screenHeight, float focalLength, const glm::vec3& cameraPosition) {
 
     glm::vec3 Point;
-    float scaleFactor = 40.0f;
+    float scaleFactor = 60.0f;
     Point.x = (x - screenWidth / 2) /(focalLength * scaleFactor);
     Point.y = -(y - screenHeight / 2) / (focalLength * scaleFactor);
     Point.z =-focalLength;
@@ -864,23 +864,35 @@ RayTriangleIntersection getReflectionIntersection(
 }
 
 
+
 glm::vec3 ComputeRefractedRay(const glm::vec3& incident, const glm::vec3& normal, float indexOfRefraction) {
     float cosi = glm::clamp(glm::dot(incident, normal), -1.0f, 1.0f);
     float etai = 1, etat = indexOfRefraction;
     glm::vec3 n = normal;
+
     if (cosi < 0) {
         cosi = -cosi;
     } else {
         std::swap(etai, etat);
         n = -normal;
     }
+
     float eta = etai / etat;
     float k = 1 - eta * eta * (1 - cosi * cosi);
-    return k < 0 ? glm::vec3(0, 0, 0) : eta * incident + (eta * cosi - sqrt(k)) * n;
+
+
+    if (k < 0) {
+
+        return incident - 2.0f * glm::dot(incident, n) * n;
+    }
+
+
+    return eta * incident + (eta * cosi - sqrt(k)) * n;
 }
 
 
 
+glm::vec3 lightposition(0,1,1);
 
 RayTriangleIntersection getClosestValidIntersectionWithReflection(
         const glm::vec3 &rayOrigin,
@@ -937,13 +949,12 @@ RayTriangleIntersection getClosestValidIntersectionWithReflection(
             return reflectedIntersection;
         }
         if (triangle.isGlass) {
-            // 计算折射光线
             glm::vec3 refractedDirection = ComputeRefractedRay(rayDirection, triangle.normal, triangle.refractiveIndex);
+
+//          glm::vec3 refractedDirection = glm::refract(rayDirection-lightposition, triangle.normal, triangle.refractiveIndex);
             glm::vec3 refractedOrigin = closestIntersection.intersectionPoint + refractedDirection * 0.001f;
             RayTriangleIntersection refractedIntersection = getClosestValidIntersectionWithReflection(
                     refractedOrigin, refractedDirection, triangles, depth + 1, maxDepth);
-
-            // 可以在此处进一步处理颜色，例如基于菲涅耳效应混合颜色
             return refractedIntersection;
         }
     }
@@ -1112,9 +1123,9 @@ Colour addColours(const Colour &colour1, const Colour &colour2) {
 
 void drawRasterisedScene_A(DrawingWindow &window, glm::vec3 cameraPosition, glm::vec3 lightPosition){
     const std::string filepath = "/home/merlin/CG2023/Weekly Workbooks/04 Wireframes and Rasterising/models/cornell-box.obj";
-//    const std::string filepath = "/home/merlin/CG2023/Weekly Workbooks/07 Lighting and Shading (external lecture)/resources/sphere.obj";
     const std::map<std::string, Colour> palette = loadMTL("/home/merlin/CG2023/Weekly Workbooks/04 Wireframes and Rasterising/models/cornell-box.mtl");
-//    const std::map<std::string, Colour> palette;
+//    const std::string filepath2 = "/home/merlin/CG2023/Weekly Workbooks/07 Lighting and Shading (external lecture)/resources/sphere.obj";
+//    const std::map<std::string, Colour> palette2;
     std::vector<ModelTriangle> models = loadOBJ(filepath, palette);
     uint32_t colour;
     for (size_t y = 0; y < window.height; y++) {
@@ -1742,7 +1753,53 @@ void drawRaytracingPhongCameraView(DrawingWindow &window, glm::vec3 campos, std:
             }
         }
     }
+//
+//TexturePoint getTextureCoordinates(const RayTriangleIntersection& intersection) {
+//    // 重心坐标
+//    float u = intersection.u;
+//    float v = intersection.v;
+//    float w = 1 - u - v;
+//    // 三角形的顶点UV坐标
+//    TexturePoint uv0 = intersection.intersectedTriangle.vertices[0].texturePoint;
+//    TexturePoint uv1 = intersection.intersectedTriangle.vertices[1].texturePoint;
+//    TexturePoint uv2 = intersection.intersectedTriangle.vertices[2].texturePoint;
+//    // 插值计算UV坐标
+//    float texX = u * uv0.x + v * uv1.x + w * uv2.x;
+//    float texY = u * uv0.y + v * uv1.y + w * uv2.y;
+//
+//    return TexturePoint(texX, texY);
+//}
 
+
+//void drawRayTracedScene(DrawingWindow &window, glm::vec3 cameraPosition) {
+//    const std::string filepath = "/home/merlin/CG2023/Weekly Workbooks/04 Wireframes and Rasterising/models/cornell-box.obj";
+//    const std::map<std::string, Colour> palette2  = loadMTL("/home/merlin/CG2023/Weekly Workbooks/04 Wireframes and Rasterising/models/cornell-box.mtl");
+//    std::vector<ModelTriangle> models = loadOBJWithTexture(filepath, palette2);
+//    for (int y = 0; y < window.height; y++) {
+//        for (int x = 0; x < window.width; x++) {
+//            glm::vec3 rayDirection = getRayDirectionFromPixel(x, y, window.width,window.height,2.0, cameraPosition);
+//            RayTriangleIntersection rayIntersection = getClosestValidIntersection(cameraPosition, rayDirection, models);
+//
+//            if (rayIntersection.distanceFromCamera != std::numeric_limits<float>::infinity()) {
+//                uint32_t colour;
+//
+//                if (isPointInShadow(rayIntersection.intersectionPoint, rayIntersection.triangleIndex, models)) {
+//                    colour = (255 << 24); // Black in shadow
+//                } else {
+//                    // Assuming texture mapping
+//                    TextureMap texture("/home/merlin/CG2023/Weekly Workbooks/05 Navigation and Transformation/models/texture.ppm");
+//                    TexturePoint texPoint = getTextureCoordinates(rayIntersection);
+//                    TexturePoint uv0 = intersection.intersectedTriangle.vertices[0].texturePoint;
+//                    TexturePoint uv1 = intersection.intersectedTriangle.vertices[1].texturePoint;
+//                    TexturePoint uv2 = intersection.intersectedTriangle.vertices[2].texturePoint;
+//                    colour = texture.getColourAt(texPoint.x, texPoint.y);
+//                }
+//
+//                window.setPixelColour(x, y, colour);
+//            }
+//        }
+//    }
+//}
 
 
 
@@ -1833,12 +1890,12 @@ void renderScene(DrawingWindow &window, glm::vec3 &cameraPosition, glm::vec3 &li
                         const glm::vec3 &vertex = triangle.vertices[i];
                         points[i] = getCanvasIntersectionPoint(cameraPosition, vertex, 2.0, 3 * WIDTH, 3 * HEIGHT);
                         points[i].texturePoint = triangle.texturePoints[i];
-                        // 调整纹理坐标
+
 //
                     }
                     CanvasTriangle canvasTriangle(points[0], points[1], points[2]);
 
-                    // 根据三角形是否有纹理来决定绘制方式
+
                     if (triangle.hasTexture) {
 //                        fillTextureTriangle(window, canvasTriangle, textureMap,depthBuffer);
                         fillTexturedTriangle(window, canvasTriangle, textureMap,depthBuffer);
@@ -1898,59 +1955,53 @@ void handleEvent_week7(SDL_Event event, DrawingWindow &window, glm::vec3 &camera
 //    glm::vec3 lightPosition2(0, 0, 1);
         float focalLength = 2.0f;
         if (event.type == SDL_KEYDOWN) {
-            float translationAmount = 1.0f; // 定义平移量
-            float rotationAmount = glm::radians(5.0f); // 定义旋转量（5度）
+            float translationAmount = 1.0f;
+            float rotationAmount = glm::radians(5.0f);
 
             // 处理平移
             if (event.key.keysym.sym == SDLK_LEFT) {
                 std::cout << "LEFT" << std::endl;
-                cameraPosition.x -= translationAmount;  // 左移
+                cameraPosition.x -= translationAmount;
             } else if (event.key.keysym.sym == SDLK_RIGHT) {
                 std::cout << "RIGHT" << std::endl;
-                cameraPosition.x += translationAmount;  // 右移
+                cameraPosition.x += translationAmount;
             } else if (event.key.keysym.sym == SDLK_UP) {
                 std::cout << "UP" << std::endl;
-                cameraPosition.y-= translationAmount;  // 上移
+                cameraPosition.y-= translationAmount;
             } else if (event.key.keysym.sym == SDLK_DOWN) {
                 std::cout << "DOWN" << std::endl;
-                cameraPosition.y += translationAmount;  // 下移
+                cameraPosition.y += translationAmount;
             } else if (event.key.keysym.sym == SDLK_w) {
-                cameraPosition.z -= translationAmount;  // 前进
+                cameraPosition.z -= translationAmount;
             } else if (event.key.keysym.sym == SDLK_s) {
-                cameraPosition.z += translationAmount;  // 后退
+                cameraPosition.z += translationAmount;
             }
-            if (event.key.keysym.sym == SDLK_a) {  // 向左旋转相机
+            if (event.key.keysym.sym == SDLK_a) {
                 glm::mat3 rotation = rotationY(-rotationAmount);
                 glm::mat3 rotationMatrix = rotationY(rotationAmount);
                 cameraPosition = rotation * cameraPosition;
                 cameraOrientation = rotationMatrix * cameraOrientation;
             }
             if (event.key.keysym.sym == SDLK_d) {  // Rotate camera right around the origin (pan right)
-                glm::mat3 rotation = rotationY(rotationAmount); // 向右旋转
+                glm::mat3 rotation = rotationY(rotationAmount);
                 glm::mat3 rotationMatrix = rotationY(-rotationAmount);
-                cameraPosition = rotation * cameraPosition; // 更新相机位置
+                cameraPosition = rotation * cameraPosition;
                 cameraOrientation = rotationMatrix * cameraOrientation;
             }
-            if (event.key.keysym.sym == SDLK_q) {  // 假设D键为绕Y轴顺时针旋转
+            if (event.key.keysym.sym == SDLK_q) {
             glm::mat3 rotation = rotationX(rotationAmount);
             glm::mat3 rotationMatrix = rotationX(-rotationAmount);
-            cameraPosition = rotation * cameraPosition; // 更新相机位置
+            cameraPosition = rotation * cameraPosition;
             cameraOrientation=rotationMatrix  * cameraOrientation;
         }
-        if (event.key.keysym.sym == SDLK_e) {  // 假设D键为绕Y轴顺时针旋转
+        if (event.key.keysym.sym == SDLK_e) {
             glm::mat3 rotation = rotationX(-rotationAmount);
             glm::mat3 rotationMatrix = rotationX(rotationAmount);
-            cameraPosition = rotation * cameraPosition; // 更新相机位置
+            cameraPosition = rotation * cameraPosition;
             cameraOrientation=rotationMatrix  * cameraOrientation;
 
         }
-//        if (event.key.keysym.sym == SDLK_x) { // 如果按下的是X键
-//                toggleOrbit(); // 切换轨道状态
-//                if (isOrbiting) {
-//                    animateCameraOrbit(cameraPosition); // 更新相机轨道位置
-//                    lookAt(cameraPosition); // 根据新位置更新相机方向
-//                }
-//        }
+
           else if (event.key.keysym.sym == SDLK_f) {
                 // Generate three random vertices
 //            CanvasPoint p1(rand() % window.width, rand() % window.height);
@@ -1963,7 +2014,6 @@ void handleEvent_week7(SDL_Event event, DrawingWindow &window, glm::vec3 &camera
                 p2.texturePoint = TexturePoint(395, 380);
                 CanvasPoint p3(10, 150);
                 p3.texturePoint = TexturePoint(65, 330);
-                // 创建三角形
                 CanvasTriangle triangle(p1, p2, p3);
 
                 // Generate a random color
@@ -2017,23 +2067,23 @@ void handleEvent_week7(SDL_Event event, DrawingWindow &window, glm::vec3 &camera
             std::cout << "Light UP" << std::endl;
             lightPosition2.y += translationAmount;
             lightPosition1.y += translationAmount;
-            lightPosition.y += translationAmount;// 光源上移
+            lightPosition.y += translationAmount;
         }
         else if (event.key.keysym.sym == SDLK_k) {
             std::cout << "Light DOWN" << std::endl;
             lightPosition2.y -= translationAmount;
             lightPosition1.y -= translationAmount;
-            lightPosition.y -= translationAmount;// 光源下移
+            lightPosition.y -= translationAmount;
         }
         else if (event.key.keysym.sym == SDLK_j) {
             std::cout << "Light LEFT" << std::endl;
-            lightPosition2.x -= translationAmount;  // 光源左移
+            lightPosition2.x -= translationAmount;
             lightPosition1.x -= translationAmount;
             lightPosition.x -= translationAmount;
         }
         else if (event.key.keysym.sym == SDLK_l) {
             std::cout << "Light RIGHT" << std::endl;
-           lightPosition2.x += translationAmount;  // 光源右移
+           lightPosition2.x += translationAmount;
            lightPosition1.x += translationAmount;
            lightPosition.x += translationAmount;
 
@@ -2083,9 +2133,6 @@ int main() {
     glm::vec3 cameraForGouraud(0.0f,1,100);
     float focalLength = 2.0f;
 
-//    glm::vec3 lightPosition(0, 1.9f, 1.4f); // 光源位置
-
-//    glm::vec3 lightPosition1(0.4f, 1.8f, 2.4f); // 光源位置
     glm::vec3 lightPosition(0, 5.1f,5);
     glm::vec3 lightPosition1(0.4f, 1.8f, 2.4f);
     glm::vec3 lightPosition2(0, 0, 1);
@@ -2094,9 +2141,9 @@ int main() {
     SDL_Event event;
     while (running) {
         while (SDL_PollEvent(&event)) {
-            // 检查事件类型
+
             handleEvent_week7(event,window,cameraPosition,lightPosition,lightPosition1,lightPosition2,sphereModel,models,Texturemodels,textureMap);
-            if (event.type == SDL_QUIT) { // 如果是退出事件，如点击窗口的关闭按钮
+            if (event.type == SDL_QUIT) {
                 running = false;
             }
         }
